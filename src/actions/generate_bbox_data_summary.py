@@ -3,9 +3,11 @@ from src.build_bounding_box import DatasetDigest, BoundingBoxBuilder
 
 
 if __name__ == "__main__":
-    INPUT = join_uri(INPUT_ROOT, "agata", "All_points_cetacea_megafauna_generated_points_5km.csv")
-    OUT_POINTS = join_uri(OUTPUT_ROOT, "agata", "data", "points_with_index.csv")
-    OUT_SUMMARY = join_uri(OUTPUT_ROOT, "agata", "data", "date_bbox_summary.csv")
+    INPUT = join_uri(
+        INPUT_ROOT, "All_points_cetacea_megafauna_generated_points_5km.csv"
+    )
+    OUT_POINTS = join_uri(OUTPUT_ROOT, "points_with_index.csv")
+    OUT_SUMMARY = join_uri(OUTPUT_ROOT, "date_bbox_summary.csv")
 
     digest = DatasetDigest(
         input_path=INPUT,
