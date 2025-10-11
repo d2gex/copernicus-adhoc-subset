@@ -5,7 +5,7 @@ import pandas as pd
 
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
-from src import config
+from src import utils
 
 
 # --- Results container ---
@@ -306,10 +306,8 @@ class DatasetDigest:
     def write(
         self, df_points: pd.DataFrame, df_summary: pd.DataFrame
     ) -> Tuple[str, str]:
-        with open(self.output_points_path, "w", newline="") as f_out:
-            df_points.to_csv(f_out, index=False)
-        with open(self.output_summary_path, "w", newline="") as f_out:
-            df_summary.to_csv(f_out, index=False)
+        utils.write_csv(df_points, self.output_points_path)
+        utils.write_csv(df_summary, self.output_summary_path)
         return self.output_points_path, self.output_summary_path
 
     # --- public API ---
