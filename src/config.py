@@ -39,7 +39,7 @@ def join_uri(base: Union[str, Path], *parts: str) -> Union[str, Path]:
 
 file_path = Path(__file__).resolve()
 ROOT_PATH = file_path.parents[1]
-LOCAL_DATA_PATH = ROOT_PATH.parents[1] / "data"
+LOCAL_DATA_PATH = ROOT_PATH / "data"
 S3_BUCKET = _required("S3_BUCKET")
 S3_OUTPUT_PREFIX = _required("S3_OUTPUT_PREFIX")
 USE_S3_INPUT = _as_bool(os.getenv("USE_S3_INPUT"), False)
