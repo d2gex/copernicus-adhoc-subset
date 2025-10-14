@@ -8,11 +8,14 @@ from src.utils import _is_s3, join_uri, write_csv
 from src.data_matching import CsvColumns, OriginalCsvDigester
 
 
+# -------------------------
+# Main (local or S3-ready)
+# -------------------------
 def main() -> None:
     # Root where points CSV and tiles live (S3 or local). Your config.OUTPUT_ROOT is s3://bucket/prefix
     root_folder: Union[str, Path] = config.OUTPUT_ROOT
 
-    ORIGINAL_CSV = join_uri(root_folder, "points_with_index.csv")
+    ORIGINAL_CSV = join_uri(root_folder, "points_with_index_test.csv")
     TILES_DIR = join_uri(root_folder, "C3S-GLO-SST-L4-REP-OBS-SST")
 
     VARIABLES = ["analysed_sst"]  # example variable
@@ -36,7 +39,7 @@ def main() -> None:
         time_dim="time",
         depth_dim="depth",
         tile_extension=".nc",
-        engine=None,  # set engine="netcdf4" or "h5netcdf" if you prefer
+        engine=None,  # local auto-detect; S3 forces "h5netcdf" internally unless you override
     )
 
     out = digester.run()

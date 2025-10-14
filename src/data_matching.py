@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 import xarray as xr
+import s3fs
 
 from dataclasses import dataclass
 from pathlib import Path
@@ -85,7 +86,10 @@ class NearestExtractor:
 
 
 class OriginalCsvDigester:
-    """Sort by survey, keep one tile in memory, call NearestExtractor per row, accumulate results."""
+    """Sort by survey, keep one tile in memory, call NearestExtractor per row, accumulate results.
+
+    Works with local folders or S3 prefixes for both the original CSV and the tiles dir.
+    """
 
     def __init__(
         self,
@@ -118,7 +122,9 @@ class OriginalCsvDigester:
         self.tile_extension = (
             tile_extension if tile_extension.startswith(".") else "." + tile_extension
         )
-        self.engine = engine
+        self.engine = (
+            engine  # if None: local auto-detect; S3 will default to "h5netcdf"
+        )
         self.extractor = NearestExtractor(
             variables=self.variables,
             lon_dim=lon_dim,
@@ -126,6 +132,17 @@ class OriginalCsvDigester:
             time_dim=time_dim,
             depth_dim=depth_dim,
         )
+
+        # s3fs client (lazy-init)
+        self._s3fs: Optional[s3fs.S3FileSystem] = None
+
+    def _fs(self) -> s3fs.S3FileSystem:
+        if self._s3fs is None:
+            # instance role / env-based creds (no keys in code)
+            self._s3fs = s3fs.S3FileSystem(
+                anon=False
+            )  # you can add client_kwargs={"region_name": "eu-west-3"} if desired
+        return self._s3fs
 
     def _tile_path(self, survey_value: str) -> Union[str, Path]:
         """Return the tile path for a survey, preserving S3 URIs as strings."""
@@ -136,13 +153,15 @@ class OriginalCsvDigester:
 
     def _open_tile(self, survey_value: str) -> xr.Dataset:
         path = self._tile_path(survey_value)
+
         if _is_s3(path):
-            # Just give xarray the s3:// URL; fsspec/s3fs + instance role handle auth.
-            return (
-                xr.open_dataset(str(path), engine=self.engine)
-                if self.engine
-                else xr.open_dataset(str(path))
-            )
+            # Open S3 object via s3fs file-like, read with h5netcdf (netCDF4/HDF5-friendly)
+            fs = self._fs()
+            # strip scheme for s3fs: "bucket/prefix/file.nc"
+            s3_key = str(path)[5:]
+            with fs.open(s3_key, "rb") as f:
+                eng = self.engine or "h5netcdf"
+                return xr.open_dataset(f, engine=eng)
 
         # Local filesystem
         p = Path(path)
