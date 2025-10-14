@@ -1,4 +1,5 @@
-from src.config import INPUT_ROOT, OUTPUT_ROOT, join_uri
+from src.config import INPUT_ROOT, OUTPUT_ROOT
+from src.utils import join_uri
 from src.build_bounding_box import DatasetDigest, BoundingBoxBuilder
 
 

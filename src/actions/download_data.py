@@ -3,8 +3,10 @@ from __future__ import annotations
 import copernicusmarine as cm
 import pandas as pd
 from pathlib import Path
-from typing import Optional, Sequence
-from src.config import OUTPUT_ROOT, join_uri
+from typing import Optional, Sequence, Union
+
+from src.config import OUTPUT_ROOT
+from src.utils import _is_s3, join_uri, write_csv  # reuse your helpers
 from src.copernicus.cm_credentials import CMCredentials
 from src.copernicus.cm_subset_client import CMSubsetClient
 from src.data_pulling import BBoxRowProcessor, SummaryDownloader
@@ -15,8 +17,8 @@ def main(
     cm,  # pre-authenticated Copernicus Marine client instance
     dataset_id: str,
     variables: Sequence[str],
-    summary_path: str | Path,
-    output_dir: str | Path,
+    summary_path: Union[str, Path],
+    output_dir: Union[str, Path],
     padding_deg: float = 0.08,
     filename_extension: str = ".nc",
     min_depth: Optional[float] = None,
@@ -25,11 +27,8 @@ def main(
 ) -> pd.DataFrame:
     """
     Parameterize product details, prepare per-row jobs, and execute downloads.
-
-    Assumes the environment is already logged in. Call `CMCredentials().ensure_present()`
-    before invoking main(); it will raise early if creds are missing.
     """
-    # Build thin client
+    # Thin client
     cm_client = CMSubsetClient(
         cm=cm,
         dataset_id=dataset_id,
@@ -39,10 +38,8 @@ def main(
         extra_kwargs=dict(extra_kwargs or {}),
     )
 
-    # Build row processor and downloader
-    row_proc = BBoxRowProcessor(
-        padding_deg=padding_deg, filename_extension=filename_extension
-    )
+    # Row processor + downloader
+    row_proc = BBoxRowProcessor(padding_deg=padding_deg, filename_extension=filename_extension)
     downloader = SummaryDownloader(
         cm_client=cm_client,
         summary_path=summary_path,
@@ -50,11 +47,19 @@ def main(
         row_processor=row_proc,
     )
 
+    # Run downloads (to local or S3 per SummaryDownloader logic)
     manifest = downloader.run()
-    # Write a manifest next to outputs
-    manifest_path = Path(output_dir) / "download_manifest.csv"
-    with open(manifest_path, "w", newline="") as f:
-        manifest.to_csv(f, index=False)
+
+    # Build manifest path "next to outputs" without breaking s3://
+    manifest_path = (
+        join_uri(output_dir, "download_manifest.csv")
+        if _is_s3(output_dir)
+        else Path(output_dir) / "download_manifest.csv"
+    )
+
+    # Persist manifest using your utils (context-managed local write; signed S3 write)
+    write_csv(manifest, manifest_path)
+
     return manifest
 
 
@@ -62,14 +67,14 @@ if __name__ == "__main__":
     # 1) Ensure credentials exist (fails fast if not)
     CMCredentials().ensure_present()
 
-    # 3) Configure your product + run
-    #    Adjust these defaults to your project or wrap with argparse if desired.
+    # 2) Configure your product + run (tweak as needed)
     DATASET_ID = "C3S-GLO-SST-L4-REP-OBS-SST"
     VARIABLES = ["analysed_sst"]
-    SUMMARY_PATH =  join_uri(OUTPUT_ROOT,  "date_bbox_summary.csv")
-    OUTPUT_DIR =  join_uri(OUTPUT_ROOT, "C3S-GLO-SST-L4-REP-OBS-SST")
 
-    # Depth: aim for first level only (example: surface layer)
+    SUMMARY_PATH = join_uri(OUTPUT_ROOT, "date_bbox_summary.csv")
+    OUTPUT_DIR = join_uri(OUTPUT_ROOT, "C3S-GLO-SST-L4-REP-OBS-SST")
+
+    # Depth (example: surface layer only)
     MIN_DEPTH = 0.0
     MAX_DEPTH = 2.0
 
@@ -85,6 +90,11 @@ if __name__ == "__main__":
         max_depth=MAX_DEPTH,
         extra_kwargs=None,
     )
-    print(
-        f"Downloaded {len(manifest_df)} files. Manifest saved to: {Path(OUTPUT_DIR) / 'download_manifest.csv'}"
+
+    # Friendly summary print with correct path formatting
+    final_manifest_path = (
+        join_uri(OUTPUT_DIR, "download_manifest.csv")
+        if _is_s3(OUTPUT_DIR)
+        else str(Path(OUTPUT_DIR) / "download_manifest.csv")
     )
+    print(f"Downloaded {len(manifest_df)} files. Manifest saved to: {final_manifest_path}")
