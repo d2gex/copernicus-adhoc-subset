@@ -66,7 +66,7 @@ if __name__ == "__main__":
     #    Adjust these defaults to your project or wrap with argparse if desired.
     DATASET_ID = "C3S-GLO-SST-L4-REP-OBS-SST"
     VARIABLES = ["analysed_sst"]
-    SUMMARY_PATH =  join_uri(OUTPUT_ROOT,  "date_bbox_summary_test.csv")
+    SUMMARY_PATH =  join_uri(OUTPUT_ROOT,  "date_bbox_summary.csv")
     OUTPUT_DIR =  join_uri(OUTPUT_ROOT, "C3S-GLO-SST-L4-REP-OBS-SST")
 
     # Depth: aim for first level only (example: surface layer)
