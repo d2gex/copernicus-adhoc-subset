@@ -190,7 +190,6 @@ class OriginalCsvDigester:
         self._close_current_handle()
 
         path = self._tile_path(survey_value)
-        print(f"[tile] opening: {path}", flush=True)
 
         if _is_s3(path):
             # Keep the file handle open as long as the Dataset lives
@@ -198,28 +197,13 @@ class OriginalCsvDigester:
             s3_key = str(path)[5:]  # strip "s3://"
             self._fh = fs.open(s3_key, "rb")
             eng = self.engine or "h5netcdf"
-            ds = xr.open_dataset(self._fh, engine=eng)
-        else:
-            p = Path(path)
-            if not p.is_file():
-                raise FileNotFoundError(str(p))
-            ds = (
-                xr.open_dataset(p, engine=self.engine)
-                if self.engine
-                else xr.open_dataset(p)
-            )
+            return xr.open_dataset(self._fh, engine=eng)
 
-        # compute & cache tile center for diagnostics
-        self._tile_center_lon, self._tile_center_lat = self._compute_tile_center(ds)
-        if (self._tile_center_lon is not None) and (self._tile_center_lat is not None):
-            print(
-                f"[tile] center approx lon={self._tile_center_lon:.4f}, lat={self._tile_center_lat:.4f}",
-                flush=True,
-            )
-        else:
-            print("[tile] center not available", flush=True)
-
-        return ds
+        # Local filesystem
+        p = Path(path)
+        if not p.is_file():
+            raise FileNotFoundError(str(p))
+        return xr.open_dataset(p, engine=self.engine) if self.engine else xr.open_dataset(p)
 
     def run(self) -> pd.DataFrame:
         # Load original CSV (local or S3) using your utils
