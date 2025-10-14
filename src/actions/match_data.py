@@ -15,7 +15,7 @@ def main() -> None:
     # Root where points CSV and tiles live (S3 or local). config.OUTPUT_ROOT may be Path or s3://
     root_folder: Union[str, Path] = config.OUTPUT_ROOT
 
-    ORIGINAL_CSV = join_uri(root_folder, "points_with_index_test.csv")
+    ORIGINAL_CSV = join_uri(root_folder, "points_with_index.csv")
     TILES_DIR    = join_uri(root_folder, "C3S-GLO-SST-L4-REP-OBS-SST")
 
     VARIABLES = ["analysed_sst"]  # example variable
