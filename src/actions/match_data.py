@@ -8,7 +8,7 @@ from src.utils import _is_s3, join_uri, write_csv
 from src.data_matching import CsvColumns, OriginalCsvDigester
 
 
-# -------------------------
+## -------------------------
 # Main (local or S3-ready)
 # -------------------------
 def main() -> None:
@@ -16,7 +16,7 @@ def main() -> None:
     root_folder: Union[str, Path] = config.OUTPUT_ROOT
 
     ORIGINAL_CSV = join_uri(root_folder, "points_with_index.csv")
-    TILES_DIR = join_uri(root_folder, "C3S-GLO-SST-L4-REP-OBS-SST")
+    TILES_DIR    = join_uri(root_folder, "C3S-GLO-SST-L4-REP-OBS-SST")
 
     VARIABLES = ["analysed_sst"]  # example variable
     COLS = CsvColumns(
@@ -39,22 +39,15 @@ def main() -> None:
         time_dim="time",
         depth_dim="depth",
         tile_extension=".nc",
-        engine=None,  # local: auto/your choice; S3: defaults to h5netcdf internally
-        progress_every=200,  # tweak how chatty you want it
+        engine=None,  # local backend; S3 will use h5netcdf via file handle
     )
 
     out = digester.run()
 
     # Save result next to inputs (S3 or local) using your utils
-    out_csv = (
-        join_uri(root_folder, "C3S-GLO-SST-L4-REP-OBS-SST.csv")
-        if _is_s3(root_folder)
-        else Path(root_folder) / "C3S-GLO-SST-L4-REP-OBS-SST.csv"
-    )
-
-    # IMPORTANT: your write_csv() already sets index=False.
-    # So DO NOT pass index=False here (it would duplicate the arg).
-    write_csv(out, out_csv)
+    out_csv = join_uri(root_folder, "C3S-GLO-SST-L4-REP-OBS-SST.csv") if _is_s3(root_folder) \
+              else Path(root_folder) / "C3S-GLO-SST-L4-REP-OBS-SST.csv"
+    write_csv(out, out_csv)  # don't pass index: utils.write_csv already sets index=False
 
 
 if __name__ == "__main__":
