@@ -47,7 +47,7 @@ def main() -> None:
     # Save result next to inputs (S3 or local) using your utils
     out_csv = join_uri(root_folder, "C3S-GLO-SST-L4-REP-OBS-SST.csv") if _is_s3(root_folder) \
               else Path(root_folder) / "C3S-GLO-SST-L4-REP-OBS-SST.csv"
-    write_csv(out, out_csv, index=False)
+    write_csv(out, out_csv)
 
 
 if __name__ == "__main__":
