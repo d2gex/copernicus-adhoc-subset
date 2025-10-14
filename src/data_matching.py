@@ -1,3 +1,5 @@
+# src/data_matching.py
+
 from __future__ import annotations
 
 import pandas as pd
@@ -6,7 +8,7 @@ import s3fs
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Sequence, Union
+from typing import List, Optional, Sequence, Union, IO
 
 from src.utils import _is_s3, join_uri, read_csv
 
@@ -50,9 +52,7 @@ class NearestExtractor:
         row_time: Optional[pd.Timestamp],
     ) -> dict:
         sel = ds.sel({self.lon_dim: lon, self.lat_dim: lat}, method="nearest")
-        if (row_time is not None) and (
-            self.time_dim in sel.dims or self.time_dim in sel.coords
-        ):
+        if (row_time is not None) and (self.time_dim in sel.dims or self.time_dim in sel.coords):
             sel = sel.sel({self.time_dim: pd.to_datetime(row_time)}, method="nearest")
         if (self.depth_dim in sel.dims) or (self.depth_dim in sel.coords):
             sel = sel.sel({self.depth_dim: 0}, method="nearest")
@@ -106,12 +106,8 @@ class OriginalCsvDigester:
         engine: Optional[str] = None,
     ) -> None:
         # Keep S3 paths as strings; local paths as Path
-        self.original_csv: Union[str, Path] = (
-            str(original_csv) if _is_s3(original_csv) else Path(original_csv)
-        )
-        self.tiles_dir: Union[str, Path] = (
-            str(tiles_dir) if _is_s3(tiles_dir) else Path(tiles_dir)
-        )
+        self.original_csv: Union[str, Path] = str(original_csv) if _is_s3(original_csv) else Path(original_csv)
+        self.tiles_dir:    Union[str, Path] = str(tiles_dir)    if _is_s3(tiles_dir)    else Path(tiles_dir)
 
         self.variables = list(variables)
         self.csv_cols = csv_cols
@@ -119,12 +115,8 @@ class OriginalCsvDigester:
         self.lat_dim = lat_dim
         self.time_dim = time_dim
         self.depth_dim = depth_dim
-        self.tile_extension = (
-            tile_extension if tile_extension.startswith(".") else "." + tile_extension
-        )
-        self.engine = (
-            engine  # if None: local auto-detect; S3 will default to "h5netcdf"
-        )
+        self.tile_extension = tile_extension if tile_extension.startswith(".") else "." + tile_extension
+        self.engine = engine  # for local; S3 defaults to "h5netcdf" unless you override
         self.extractor = NearestExtractor(
             variables=self.variables,
             lon_dim=lon_dim,
@@ -133,15 +125,13 @@ class OriginalCsvDigester:
             depth_dim=depth_dim,
         )
 
-        # s3fs client (lazy-init)
+        # S3 fs and open handle for current dataset (kept alive while ds is open)
         self._s3fs: Optional[s3fs.S3FileSystem] = None
+        self._fh: Optional[IO[bytes]] = None  # file handle for current S3 tile
 
     def _fs(self) -> s3fs.S3FileSystem:
         if self._s3fs is None:
-            # instance role / env-based creds (no keys in code)
-            self._s3fs = s3fs.S3FileSystem(
-                anon=False
-            )  # you can add client_kwargs={"region_name": "eu-west-3"} if desired
+            self._s3fs = s3fs.S3FileSystem(anon=False)
         return self._s3fs
 
     def _tile_path(self, survey_value: str) -> Union[str, Path]:
@@ -151,67 +141,55 @@ class OriginalCsvDigester:
             return join_uri(self.tiles_dir, filename)  # s3://bucket/prefix/file.nc
         return Path(self.tiles_dir) / filename
 
+    def _close_current_handle(self) -> None:
+        try:
+            if self._fh is not None:
+                self._fh.close()
+        finally:
+            self._fh = None
+
     def _open_tile(self, survey_value: str) -> xr.Dataset:
+        # Always close previous S3 handle before opening a new one
+        self._close_current_handle()
+
         path = self._tile_path(survey_value)
 
         if _is_s3(path):
-            # Open S3 object via s3fs file-like, read with h5netcdf (netCDF4/HDF5-friendly)
+            # Keep the file handle open as long as the Dataset lives
             fs = self._fs()
-            # strip scheme for s3fs: "bucket/prefix/file.nc"
-            s3_key = str(path)[5:]
-            with fs.open(s3_key, "rb") as f:
-                eng = self.engine or "h5netcdf"
-                return xr.open_dataset(f, engine=eng)
+            s3_key = str(path)[5:]  # strip "s3://"
+            self._fh = fs.open(s3_key, "rb")
+            eng = self.engine or "h5netcdf"
+            return xr.open_dataset(self._fh, engine=eng)
 
         # Local filesystem
         p = Path(path)
         if not p.is_file():
             raise FileNotFoundError(str(p))
-        return (
-            xr.open_dataset(p, engine=self.engine)
-            if self.engine
-            else xr.open_dataset(p)
-        )
+        return xr.open_dataset(p, engine=self.engine) if self.engine else xr.open_dataset(p)
 
     def run(self) -> pd.DataFrame:
         # Load original CSV (local or S3) using your utils
         try:
-            df = read_csv(
-                self.original_csv, engine="python", sep=None, on_bad_lines="error"
-            )
+            df = read_csv(self.original_csv, engine="python", sep=None, on_bad_lines="error")
         except Exception:
-            df = read_csv(
-                self.original_csv, engine="python", sep=None, on_bad_lines="skip"
-            )
+            df = read_csv(self.original_csv, engine="python", sep=None, on_bad_lines="skip")
 
-        required = [
-            self.csv_cols.unique_id,
-            self.csv_cols.survey,
-            self.csv_cols.lon,
-            self.csv_cols.lat,
-        ]
+        required = [self.csv_cols.unique_id, self.csv_cols.survey, self.csv_cols.lon, self.csv_cols.lat]
         for c in required:
             if c not in df.columns:
                 raise KeyError(f"Missing column: {c}")
         if self.csv_cols.time is not None and self.csv_cols.time not in df.columns:
             raise KeyError(f"Missing column: {self.csv_cols.time}")
 
-        cols = [
-            self.csv_cols.unique_id,
-            self.csv_cols.survey,
-            self.csv_cols.lon,
-            self.csv_cols.lat,
-        ]
+        cols = [self.csv_cols.unique_id, self.csv_cols.survey, self.csv_cols.lon, self.csv_cols.lat]
         if self.csv_cols.time:
             cols.append(self.csv_cols.time)
         work = df[cols].copy()
 
         if self.csv_cols.time:
             work[self.csv_cols.time] = pd.to_datetime(
-                work[self.csv_cols.time],
-                format="%d/%m/%Y",
-                dayfirst=True,
-                errors="coerce",
+                work[self.csv_cols.time], format="%d/%m/%Y", dayfirst=True, errors="coerce"
             )
 
         work = work.sort_values(self.csv_cols.survey).reset_index(drop=True)
@@ -224,22 +202,22 @@ class OriginalCsvDigester:
             for row in work.itertuples(index=False):
                 survey = str(getattr(row, self.csv_cols.survey))
                 if survey != current_survey:
+                    # close previous dataset + S3 handle
                     if ds is not None:
                         ds.close()
                         ds = None
+                    self._close_current_handle()
+
+                    # open next tile
                     ds = self._open_tile(survey)
                     current_survey = survey
 
                 uid = getattr(row, self.csv_cols.unique_id)
                 lon = getattr(row, self.csv_cols.lon)
                 lat = getattr(row, self.csv_cols.lat)
-                row_time = (
-                    getattr(row, self.csv_cols.time) if self.csv_cols.time else None
-                )
+                row_time = getattr(row, self.csv_cols.time) if self.csv_cols.time else None
 
-                vals = self.extractor.extract(
-                    ds=ds, lon=lon, lat=lat, row_time=row_time
-                )
+                vals = self.extractor.extract(ds=ds, lon=lon, lat=lat, row_time=row_time)
 
                 rec = {
                     self.csv_cols.unique_id: uid,
@@ -252,7 +230,12 @@ class OriginalCsvDigester:
                 rec.update(vals)
                 results.append(rec)
         finally:
+            # close dataset and any lingering S3 handle
             if ds is not None:
                 ds.close()
+            self._close_current_handle()
 
         return pd.DataFrame(results)
+
+
+

@@ -12,11 +12,11 @@ from src.data_matching import CsvColumns, OriginalCsvDigester
 # Main (local or S3-ready)
 # -------------------------
 def main() -> None:
-    # Root where points CSV and tiles live (S3 or local). Your config.OUTPUT_ROOT is s3://bucket/prefix
+    # Root where points CSV and tiles live (S3 or local). config.OUTPUT_ROOT may be Path or s3://
     root_folder: Union[str, Path] = config.OUTPUT_ROOT
 
-    ORIGINAL_CSV = join_uri(root_folder, "points_with_index.csv")
-    TILES_DIR = join_uri(root_folder, "C3S-GLO-SST-L4-REP-OBS-SST")
+    ORIGINAL_CSV = join_uri(root_folder, "points_with_index_test.csv")
+    TILES_DIR    = join_uri(root_folder, "C3S-GLO-SST-L4-REP-OBS-SST")
 
     VARIABLES = ["analysed_sst"]  # example variable
     COLS = CsvColumns(
@@ -26,8 +26,8 @@ def main() -> None:
         lat="lat",
         time="date",  # dd/mm/YYYY
     )
-    LON_DIM = "longitude"  # set to your dataset
-    LAT_DIM = "latitude"  # set to your dataset
+    LON_DIM = "longitude"
+    LAT_DIM = "latitude"
 
     digester = OriginalCsvDigester(
         original_csv=ORIGINAL_CSV,
@@ -39,19 +39,17 @@ def main() -> None:
         time_dim="time",
         depth_dim="depth",
         tile_extension=".nc",
-        engine=None,  # local auto-detect; S3 forces "h5netcdf" internally unless you override
+        engine=None,  # local: auto/your choice; S3: defaults to h5netcdf internally
     )
 
     out = digester.run()
 
     # Save result next to inputs (S3 or local) using your utils
-    out_csv = (
-        join_uri(root_folder, "C3S-GLO-SST-L4-REP-OBS-SST.csv")
-        if _is_s3(root_folder)
-        else Path(root_folder) / "C3S-GLO-SST-L4-REP-OBS-SST.csv"
-    )
+    out_csv = join_uri(root_folder, "C3S-GLO-SST-L4-REP-OBS-SST.csv") if _is_s3(root_folder) \
+              else Path(root_folder) / "C3S-GLO-SST-L4-REP-OBS-SST.csv"
     write_csv(out, out_csv, index=False)
 
 
 if __name__ == "__main__":
     main()
+
