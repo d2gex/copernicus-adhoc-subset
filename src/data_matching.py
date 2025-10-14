@@ -137,15 +137,13 @@ class OriginalCsvDigester:
     def _open_tile(self, survey_value: str) -> xr.Dataset:
         path = self._tile_path(survey_value)
         if _is_s3(path):
-            # Open directly from S3 via s3fs/fsspec; signed with instance role
-            backend_kwargs = {"storage_options": {"anon": False}}
+            # Just give xarray the s3:// URL; fsspec/s3fs + instance role handle auth.
             return (
-                xr.open_dataset(
-                    str(path), engine=self.engine, backend_kwargs=backend_kwargs
-                )
+                xr.open_dataset(str(path), engine=self.engine)
                 if self.engine
-                else xr.open_dataset(str(path), backend_kwargs=backend_kwargs)
+                else xr.open_dataset(str(path))
             )
+
         # Local filesystem
         p = Path(path)
         if not p.is_file():
