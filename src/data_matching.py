@@ -1,14 +1,18 @@
 from __future__ import annotations
+
 import pandas as pd
 import xarray as xr
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Sequence
+from typing import List, Optional, Sequence, Union
 
-from src import config
+from src.utils import _is_s3, join_uri, read_csv
 
 
+# ------------------------
+# Data containers & config
+# ------------------------
 @dataclass(frozen=True)
 class CsvColumns:
     unique_id: str
@@ -97,8 +101,14 @@ class OriginalCsvDigester:
         tile_extension: str = ".nc",
         engine: Optional[str] = None,
     ) -> None:
-        self.original_csv = Path(original_csv)
-        self.tiles_dir = Path(tiles_dir)
+        # Keep S3 paths as strings; local paths as Path
+        self.original_csv: Union[str, Path] = (
+            str(original_csv) if _is_s3(original_csv) else Path(original_csv)
+        )
+        self.tiles_dir: Union[str, Path] = (
+            str(tiles_dir) if _is_s3(tiles_dir) else Path(tiles_dir)
+        )
+
         self.variables = list(variables)
         self.csv_cols = csv_cols
         self.lon_dim = lon_dim
@@ -117,19 +127,45 @@ class OriginalCsvDigester:
             depth_dim=depth_dim,
         )
 
+    def _tile_path(self, survey_value: str) -> Union[str, Path]:
+        """Return the tile path for a survey, preserving S3 URIs as strings."""
+        filename = f"{survey_value}{self.tile_extension}"
+        if _is_s3(self.tiles_dir):
+            return join_uri(self.tiles_dir, filename)  # s3://bucket/prefix/file.nc
+        return Path(self.tiles_dir) / filename
+
     def _open_tile(self, survey_value: str) -> xr.Dataset:
-        path = self.tiles_dir / f"{survey_value}{self.tile_extension}"
-        if not path.is_file():
-            raise FileNotFoundError(str(path))
+        path = self._tile_path(survey_value)
+        if _is_s3(path):
+            # Open directly from S3 via s3fs/fsspec; signed with instance role
+            backend_kwargs = {"storage_options": {"anon": False}}
+            return (
+                xr.open_dataset(
+                    str(path), engine=self.engine, backend_kwargs=backend_kwargs
+                )
+                if self.engine
+                else xr.open_dataset(str(path), backend_kwargs=backend_kwargs)
+            )
+        # Local filesystem
+        p = Path(path)
+        if not p.is_file():
+            raise FileNotFoundError(str(p))
         return (
-            xr.open_dataset(path, engine=self.engine)
+            xr.open_dataset(p, engine=self.engine)
             if self.engine
-            else xr.open_dataset(path)
+            else xr.open_dataset(p)
         )
 
     def run(self) -> pd.DataFrame:
-        with open(self.original_csv, "rb") as f:
-            df = pd.read_csv(f)
+        # Load original CSV (local or S3) using your utils
+        try:
+            df = read_csv(
+                self.original_csv, engine="python", sep=None, on_bad_lines="error"
+            )
+        except Exception:
+            df = read_csv(
+                self.original_csv, engine="python", sep=None, on_bad_lines="skip"
+            )
 
         required = [
             self.csv_cols.unique_id,
@@ -178,20 +214,15 @@ class OriginalCsvDigester:
                     current_survey = survey
 
                 uid = getattr(row, self.csv_cols.unique_id)
-                lon = getattr(row, self.csv_cols.lon)  # already a float
-                lat = getattr(row, self.csv_cols.lat)  # already a float
+                lon = getattr(row, self.csv_cols.lon)
+                lat = getattr(row, self.csv_cols.lat)
                 row_time = (
                     getattr(row, self.csv_cols.time) if self.csv_cols.time else None
                 )
 
-                try:
-                    vals = self.extractor.extract(
-                        ds=ds, lon=lon, lat=lat, row_time=row_time
-                    )
-                except Exception:
-                    raise
-                    # vals = {v: None for v in self.variables}
-                    # vals["match_status"] = -1
+                vals = self.extractor.extract(
+                    ds=ds, lon=lon, lat=lat, row_time=row_time
+                )
 
                 rec = {
                     self.csv_cols.unique_id: uid,
