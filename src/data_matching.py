@@ -67,7 +67,9 @@ class NearestExtractor:
     ) -> dict:
         # nearest on lon/lat; then (optional) time & depth
         sel = ds.sel({self.lon_dim: lon, self.lat_dim: lat}, method="nearest")
-        if (row_time is not None) and (self.time_dim in sel.dims or self.time_dim in sel.coords):
+        if (row_time is not None) and (
+            self.time_dim in sel.dims or self.time_dim in sel.coords
+        ):
             sel = sel.sel({self.time_dim: pd.to_datetime(row_time)}, method="nearest")
         if (self.depth_dim in sel.dims) or (self.depth_dim in sel.coords):
             sel = sel.sel({self.depth_dim: 0}, method="nearest")
@@ -126,8 +128,12 @@ class OriginalCsvDigester:
         engine: Optional[str] = None,
     ) -> None:
         # Keep S3 paths as strings; local paths as Path
-        self.original_csv: Union[str, Path] = str(original_csv) if _is_s3(original_csv) else Path(original_csv)
-        self.tiles_dir:    Union[str, Path] = str(tiles_dir)    if _is_s3(tiles_dir)    else Path(tiles_dir)
+        self.original_csv: Union[str, Path] = (
+            str(original_csv) if _is_s3(original_csv) else Path(original_csv)
+        )
+        self.tiles_dir: Union[str, Path] = (
+            str(tiles_dir) if _is_s3(tiles_dir) else Path(tiles_dir)
+        )
 
         self.variables = list(variables)
         self.csv_cols = csv_cols
@@ -135,7 +141,9 @@ class OriginalCsvDigester:
         self.lat_dim = lat_dim
         self.time_dim = time_dim
         self.depth_dim = depth_dim
-        self.tile_extension = tile_extension if tile_extension.startswith(".") else "." + tile_extension
+        self.tile_extension = (
+            tile_extension if tile_extension.startswith(".") else "." + tile_extension
+        )
         self.engine = engine  # local backend; S3 opens via h5netcdf by default
         self.extractor = NearestExtractor(
             variables=self.variables,
@@ -168,16 +176,18 @@ class OriginalCsvDigester:
         finally:
             self._fh = None
 
-    def _open_tile(self, survey_value: str) -> xr.Dataset:
+    def _open_tile(self, survey_value: str) -> Optional[xr.Dataset]:
         # Close previous S3 handle before opening a new one
         self._close_current_handle()
 
         path = self._tile_path(survey_value)
 
         if _is_s3(path):
-            # Keep the file handle open as long as the Dataset lives
             fs = self._fs()
             s3_key = str(path)[5:]  # strip "s3://"
+            if not fs.exists(s3_key):
+                return None
+            # Keep the file handle open as long as the Dataset lives
             self._fh = fs.open(s3_key, "rb")
             eng = self.engine or "h5netcdf"
             return xr.open_dataset(self._fh, engine=eng)
@@ -185,43 +195,68 @@ class OriginalCsvDigester:
         # Local filesystem
         p = Path(path)
         if not p.is_file():
-            raise FileNotFoundError(str(p))
-        return xr.open_dataset(p, engine=self.engine) if self.engine else xr.open_dataset(p)
+            return None
+        return (
+            xr.open_dataset(p, engine=self.engine)
+            if self.engine
+            else xr.open_dataset(p)
+        )
 
     def run(self) -> pd.DataFrame:
         # Load original CSV (local or S3) using your utils
         try:
-            df = read_csv(self.original_csv, engine="python", sep=None, on_bad_lines="error")
+            df = read_csv(
+                self.original_csv, engine="python", sep=None, on_bad_lines="error"
+            )
         except Exception:
-            df = read_csv(self.original_csv, engine="python", sep=None, on_bad_lines="skip")
+            df = read_csv(
+                self.original_csv, engine="python", sep=None, on_bad_lines="skip"
+            )
 
-        required = [self.csv_cols.unique_id, self.csv_cols.survey, self.csv_cols.lon, self.csv_cols.lat]
+        required = [
+            self.csv_cols.unique_id,
+            self.csv_cols.survey,
+            self.csv_cols.lon,
+            self.csv_cols.lat,
+        ]
         for c in required:
             if c not in df.columns:
                 raise KeyError(f"Missing column: {c}")
         if self.csv_cols.time is not None and self.csv_cols.time not in df.columns:
             raise KeyError(f"Missing column: {self.csv_cols.time}")
 
-        cols = [self.csv_cols.unique_id, self.csv_cols.survey, self.csv_cols.lon, self.csv_cols.lat]
+        cols = [
+            self.csv_cols.unique_id,
+            self.csv_cols.survey,
+            self.csv_cols.lon,
+            self.csv_cols.lat,
+        ]
         if self.csv_cols.time:
             cols.append(self.csv_cols.time)
         work = df[cols].copy()
 
         if self.csv_cols.time:
             work[self.csv_cols.time] = pd.to_datetime(
-                work[self.csv_cols.time], format="%d/%m/%Y", dayfirst=True, errors="coerce"
+                work[self.csv_cols.time],
+                format="%d/%m/%Y",
+                dayfirst=True,
+                errors="coerce",
             )
 
         work = work.sort_values(self.csv_cols.survey).reset_index(drop=True)
 
         # progress at 10% steps
         n = len(work)
-        print(f"[run] rows={n}, surveys={work[self.csv_cols.survey].nunique()}", flush=True)
+        print(
+            f"[run] rows={n}, surveys={work[self.csv_cols.survey].nunique()}",
+            flush=True,
+        )
         next_pct = 10
 
         results: List[dict] = []
         current_survey: Optional[str] = None
         ds: Optional[xr.Dataset] = None
+        missing_surveys: set[str] = set()
 
         try:
             for i, row in enumerate(work.itertuples(index=False), start=1):
@@ -236,29 +271,43 @@ class OriginalCsvDigester:
                         ds.close()
                         ds = None
                     self._close_current_handle()
-                    ds = self._open_tile(survey)
-                    current_survey = survey
 
-                uid = getattr(row, self.csv_cols.unique_id)
-                lon = getattr(row, self.csv_cols.lon)
-                lat = getattr(row, self.csv_cols.lat)
-                row_time = getattr(row, self.csv_cols.time) if self.csv_cols.time else None
+                    if survey in missing_surveys:
+                        current_survey = survey
+                    else:
+                        ds = self._open_tile(survey)
+                        current_survey = survey
+                        if ds is None:
+                            missing_surveys.add(survey)
+                            print(
+                                f"[skip] missing tile for survey={survey}", flush=True
+                            )
 
-                vals = self.extractor.extract(ds=ds, lon=lon, lat=lat, row_time=row_time)
+                # Only process when we have an open dataset
+                if ds is not None:
+                    uid = getattr(row, self.csv_cols.unique_id)
+                    lon = getattr(row, self.csv_cols.lon)
+                    lat = getattr(row, self.csv_cols.lat)
+                    row_time = (
+                        getattr(row, self.csv_cols.time) if self.csv_cols.time else None
+                    )
 
-                rec = {
-                    self.csv_cols.unique_id: uid,
-                    self.csv_cols.survey: survey,
-                    self.csv_cols.lon: lon,
-                    self.csv_cols.lat: lat,
-                }
-                if self.csv_cols.time:
-                    rec[self.csv_cols.time] = row_time
-                # include actual cell center from extractor
-                rec["cell_lon"] = vals.pop("cell_lon", None)
-                rec["cell_lat"] = vals.pop("cell_lat", None)
-                rec.update(vals)
-                results.append(rec)
+                    vals = self.extractor.extract(
+                        ds=ds, lon=lon, lat=lat, row_time=row_time
+                    )
+
+                    rec = {
+                        self.csv_cols.unique_id: uid,
+                        self.csv_cols.survey: survey,
+                        self.csv_cols.lon: lon,
+                        self.csv_cols.lat: lat,
+                    }
+                    if self.csv_cols.time:
+                        rec[self.csv_cols.time] = row_time
+                    rec["cell_lon"] = vals.pop("cell_lon", None)
+                    rec["cell_lat"] = vals.pop("cell_lat", None)
+                    rec.update(vals)
+                    results.append(rec)
         finally:
             if ds is not None:
                 ds.close()
