@@ -1,5 +1,5 @@
 from __future__ import annotations
-
+import os
 import copernicusmarine as cm
 import pandas as pd
 from pathlib import Path
@@ -77,16 +77,16 @@ if __name__ == "__main__":
     DATASET_ID = "cmems_mod_glo_bgc_my_0.25deg_P1D-m"
     VARIABLES = ["chl", "nppv"]
 
+    # Min/Max depth
+    MIN_DEPTH = float(os.getenv("CM_MIN_DEPTH", "").strip())
+    MAX_DEPTH = float(os.getenv("CM_MAX_DEPTH", "").strip())
+
+    # Global date constraints (inclusive), dd/mm/YYYY; blank -> None
+    START_DT = os.getenv("CM_START_DATE", "").strip() or None
+    END_DT = os.getenv("CM_END_DATE", "").strip() or None
+
     SUMMARY_PATH = join_uri(OUTPUT_ROOT, "date_bbox_summary.csv")
     OUTPUT_DIR = join_uri(OUTPUT_ROOT, "cmems_mod_glo_bgc_my_0.25deg_P1D-m")
-
-    # Depth (example: surface layer only)
-    MIN_DEPTH = 0.0
-    MAX_DEPTH = 2.0
-
-    # Global date constraints (inclusive), dd/mm/YYYY
-    START_DT = "01/01/2012"
-    END_DT = "31/12/2022"
 
     manifest_df = main(
         cm=cm,
