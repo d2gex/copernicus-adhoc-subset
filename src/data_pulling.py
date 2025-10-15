@@ -189,16 +189,20 @@ class SummaryDownloader:
     def _zip_dir(self, src_dir: Path, zip_path: Path) -> None:
         # Build a stable list first and exclude the zip we're creating
         files = [
-            p for p in sorted(src_dir.iterdir())
+            p
+            for p in sorted(src_dir.iterdir())
             if p.is_file() and p.resolve() != zip_path.resolve()
         ]
-        with zipfile.ZipFile(zip_path, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+        with zipfile.ZipFile(
+            zip_path, mode="w", compression=zipfile.ZIP_DEFLATED
+        ) as zf:
             for p in files:
                 zf.write(p, arcname=p.name)
 
     def _create_zip_bundle(self, local_out: Path) -> tuple[str, Path]:
         """
         Build zip name from the last segment of output_dir, zip local_out, return (zip_name, zip_path).
+        The zip is created as a SIBLING of local_out (in local_out.parent), not inside local_out.
         """
         if _is_s3(self.output_dir):
             _, prefix = self._parse_s3(str(self.output_dir))
@@ -207,7 +211,7 @@ class SummaryDownloader:
             folder_basename = Path(self.output_dir).name
 
         zip_name = f"{folder_basename}.zip"
-        zip_path = local_out / zip_name
+        zip_path = local_out.parent / zip_name  # <-- SIBLING, not child
         self._zip_dir(local_out, zip_path)
         return zip_name, zip_path
 
