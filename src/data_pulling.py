@@ -126,7 +126,6 @@ class SummaryDownloader:
         end_datetime: Optional[str] = None,
     ) -> None:
         self.client = cm_client
-        # keep S3 as str; local as Path
         self.summary_path: Union[str, Path] = (
             str(summary_path) if _is_s3(summary_path) else Path(summary_path)
         )
@@ -137,6 +136,20 @@ class SummaryDownloader:
         self.cols = columns or row_processor.cols
         self.start_datetime = start_datetime
         self.end_datetime = end_datetime
+
+        # normalize constructor dates once
+        self._start_iso = self._parse_ddmmyyyy_to_iso(self.start_datetime)
+        self._end_iso = self._parse_ddmmyyyy_to_iso(self.end_datetime)
+
+    # add inside class SummaryDownloader
+    def _parse_ddmmyyyy_to_iso(self, value: Optional[str]) -> Optional[str]:
+        """dd/mm/YYYY -> 'YYYY-MM-DD', or None if empty/invalid."""
+        if value is None:
+            return None
+        ts = pd.to_datetime(value, format="%d/%m/%Y", dayfirst=True, errors="coerce")
+        if pd.isna(ts):
+            return None
+        return ts.date().isoformat()
 
     def _load_summary(self) -> pd.DataFrame:
         # Use your utils.read_csv; allow pandas to infer delimiter (python engine).
@@ -206,6 +219,31 @@ class SummaryDownloader:
         zip_key = "/".join([prefix.rstrip("/"), zip_name])
         s3.upload_file(str(zip_path), bucket, zip_key)
 
+    def _constrain_dates(
+        self,
+        row_start_iso: Optional[str],
+        row_end_iso: Optional[str],
+    ) -> tuple[Optional[str], Optional[str], bool]:
+        """
+        Intersect row dates with global dates.
+        If BOTH global dates are None, skip constraining entirely and never invalidate.
+        Returns (req_start_iso, req_end_iso, valid_interval).
+        """
+        # No global constraints: pass row dates through and mark as valid.
+        if self._start_iso is None and self._end_iso is None:
+            return row_start_iso, row_end_iso, True
+
+        starts = [d for d in (row_start_iso, self._start_iso) if d is not None]
+        ends = [d for d in (row_end_iso, self._end_iso) if d is not None]
+        req_start = max(starts) if starts else None
+        req_end = min(ends) if ends else None
+
+        # Only invalidate when both bounds exist AND the intersection is empty.
+        valid = not (
+            req_start is not None and req_end is not None and req_start > req_end
+        )
+        return req_start, req_end, valid
+
     def run(self) -> pd.DataFrame:
         writing_to_s3 = _is_s3(self.output_dir)
 
@@ -222,24 +260,41 @@ class SummaryDownloader:
             self.row_processor.prepare_job(row) for _, row in df.iterrows()
         ]
 
-        for job in jobs:
-            self.client.subset_one(
-                bbox=(job.min_lon, job.max_lon, job.min_lat, job.max_lat),
-                output_filename=job.output_filename,
-                output_directory=local_out,  # always local filesystem for the CM client
-                start_datetime=job.start_datetime or self.start_datetime,
-                end_datetime=job.end_datetime or self.end_datetime,
-            )
+        # Execute only valid (date-constrained) jobs; keep constrained dates for manifest.
+        executed: List[tuple[SubsetJob, Optional[str], Optional[str]]] = []
 
+        for job in jobs:
+            req_start, req_end, valid = self._constrain_dates(
+                job.start_datetime, job.end_datetime
+            )
+            if not valid:
+                print(
+                    f"[skip] survey={job.survey_number} dates out of range ({req_start}..{req_end})"
+                )
+            else:
+                self.client.subset_one(
+                    bbox=(job.min_lon, job.max_lon, job.min_lat, job.max_lat),
+                    output_filename=job.output_filename,
+                    output_directory=local_out,  # always local filesystem for the CM client
+                    start_datetime=req_start,
+                    end_datetime=req_end,
+                )
+                executed.append((job, req_start, req_end))
+
+        # Create zip bundle from local_out (unchanged behavior)
         zip_name, zip_path = self._create_zip_bundle(local_out)
+
         if writing_to_s3:
             s3 = boto3.client("s3")
             bucket, prefix = self._parse_s3(str(self.output_dir))
-            for j in jobs:
-                src = local_out / j.output_filename
-                key = "/".join([prefix.rstrip("/"), j.output_filename])
+
+            # Upload only files that were actually executed
+            for job, _, _ in executed:
+                src = local_out / job.output_filename
+                key = "/".join([prefix.rstrip("/"), job.output_filename])
                 s3.upload_file(str(src), bucket, key)
 
+            # Upload the zip bundle
             self._upload_zip_bundle_to_s3(
                 s3=s3,
                 bucket=bucket,
@@ -248,23 +303,24 @@ class SummaryDownloader:
                 zip_path=zip_path,
             )
 
-        manifest_rows = []
-        for j in jobs:
+        # Manifest reflects only executed jobs, with constrained dates
+        manifest_rows: List[dict] = []
+        for job, req_start, req_end in executed:
             if writing_to_s3:
                 out_path = join_uri(
-                    self.output_dir, j.output_filename
+                    self.output_dir, job.output_filename
                 )  # s3://bucket/prefix/file
             else:
-                out_path = str(Path(self.output_dir) / j.output_filename)
+                out_path = str(Path(self.output_dir) / job.output_filename)
             manifest_rows.append(
                 {
-                    "survey_number": j.survey_number,
-                    "min_lon": j.min_lon,
-                    "max_lon": j.max_lon,
-                    "min_lat": j.min_lat,
-                    "max_lat": j.max_lat,
-                    "start_datetime": j.start_datetime,
-                    "end_datetime": j.end_datetime,
+                    "survey_number": job.survey_number,
+                    "min_lon": job.min_lon,
+                    "max_lon": job.max_lon,
+                    "min_lat": job.min_lat,
+                    "max_lat": job.max_lat,
+                    "start_datetime": req_start,  # constrained
+                    "end_datetime": req_end,  # constrained
                     "output_path": out_path,
                 }
             )

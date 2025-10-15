@@ -24,6 +24,8 @@ def main(
     min_depth: Optional[float] = None,
     max_depth: Optional[float] = None,
     extra_kwargs: Optional[dict] = None,
+    start_datetime: Optional[str] = None,  # dd/mm/YYYY
+    end_datetime: Optional[str] = None,  # dd/mm/YYYY
 ) -> pd.DataFrame:
     """
     Parameterize product details, prepare per-row jobs, and execute downloads.
@@ -39,12 +41,16 @@ def main(
     )
 
     # Row processor + downloader
-    row_proc = BBoxRowProcessor(padding_deg=padding_deg, filename_extension=filename_extension)
+    row_proc = BBoxRowProcessor(
+        padding_deg=padding_deg, filename_extension=filename_extension
+    )
     downloader = SummaryDownloader(
         cm_client=cm_client,
         summary_path=summary_path,
         output_dir=output_dir,
         row_processor=row_proc,
+        start_datetime=start_datetime,  # NEW: pass-through
+        end_datetime=end_datetime,  # NEW: pass-through
     )
 
     # Run downloads (to local or S3 per SummaryDownloader logic)
@@ -68,15 +74,19 @@ if __name__ == "__main__":
     CMCredentials().ensure_present()
 
     # 2) Configure your product + run (tweak as needed)
-    DATASET_ID = "C3S-GLO-SST-L4-REP-OBS-SST"
-    VARIABLES = ["analysed_sst"]
+    DATASET_ID = "cmems_mod_glo_bgc_my_0.25deg_P1D-m"
+    VARIABLES = ["chl", "nppv"]
 
     SUMMARY_PATH = join_uri(OUTPUT_ROOT, "date_bbox_summary.csv")
-    OUTPUT_DIR = join_uri(OUTPUT_ROOT, "C3S-GLO-SST-L4-REP-OBS-SST")
+    OUTPUT_DIR = join_uri(OUTPUT_ROOT, "cmems_mod_glo_bgc_my_0.25deg_P1D-m")
 
     # Depth (example: surface layer only)
     MIN_DEPTH = 0.0
     MAX_DEPTH = 2.0
+
+    # Global date constraints (inclusive), dd/mm/YYYY
+    START_DT = "01/01/2012"
+    END_DT = "31/12/2022"
 
     manifest_df = main(
         cm=cm,
@@ -89,6 +99,8 @@ if __name__ == "__main__":
         min_depth=MIN_DEPTH,
         max_depth=MAX_DEPTH,
         extra_kwargs=None,
+        start_datetime=START_DT,
+        end_datetime=END_DT,
     )
 
     # Friendly summary print with correct path formatting
@@ -97,4 +109,6 @@ if __name__ == "__main__":
         if _is_s3(OUTPUT_DIR)
         else str(Path(OUTPUT_DIR) / "download_manifest.csv")
     )
-    print(f"Downloaded {len(manifest_df)} files. Manifest saved to: {final_manifest_path}")
+    print(
+        f"Downloaded {len(manifest_df)} files. Manifest saved to: {final_manifest_path}"
+    )
