@@ -74,8 +74,9 @@ if __name__ == "__main__":
     CMCredentials().ensure_present()
 
     # 2) Configure your product + run (tweak as needed)
-    DATASET_ID = "cmems_mod_glo_bgc_my_0.25deg_P1D-m"
-    VARIABLES = ["chl", "nppv"]
+    DATASET_ID = os.getenv("CM_DATASET_ID").strip()
+    _vars = os.getenv("CM_VARIABLES")
+    VARIABLES = [v.strip() for v in _vars.split(",") if v.strip()]
 
     # Min/Max depth
     MIN_DEPTH = float(os.getenv("CM_MIN_DEPTH", "").strip())
@@ -85,8 +86,10 @@ if __name__ == "__main__":
     START_DT = os.getenv("CM_START_DATE", "").strip() or None
     END_DT = os.getenv("CM_END_DATE", "").strip() or None
 
-    SUMMARY_PATH = join_uri(OUTPUT_ROOT, "date_bbox_summary.csv")
-    OUTPUT_DIR = join_uri(OUTPUT_ROOT, "cmems_mod_glo_bgc_my_0.25deg_P1D-m")
+    # DATA DOWNLOADING INPUT
+    DATA_DOWNLOADING_INPUT = os.getenv("CM_DATA_DOWNLOADING_CSV").strip()
+    SUMMARY_PATH = join_uri(OUTPUT_ROOT, DATA_DOWNLOADING_INPUT)
+    OUTPUT_DIR = join_uri(OUTPUT_ROOT, DATASET_ID)
 
     manifest_df = main(
         cm=cm,
