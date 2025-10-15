@@ -186,6 +186,17 @@ class SummaryDownloader:
             raise ValueError(f"Bad S3 URI: {uri}")
         return bucket, key
 
+    def _s3_parent_prefix(self, prefix: str) -> str:
+        """
+        Return the parent prefix of 'prefix'.
+        'output/C3S-GLO...' -> 'output'
+        'output/' -> ''
+        """
+        p = prefix.rstrip("/")
+        if "/" not in p:
+            return ""
+        return p.rsplit("/", 1)[0]
+
     def _zip_dir(self, src_dir: Path, zip_path: Path) -> None:
         # Build a stable list first and exclude the zip we're creating
         files = [
@@ -219,9 +230,10 @@ class SummaryDownloader:
         self, *, s3, bucket: str, prefix: str, zip_name: str, zip_path: Path
     ) -> None:
         """
-        Upload the previously created zip bundle to s3://bucket/prefix/zip_name.
+        Upload the zip bundle as a SIBLING of 'prefix' (i.e., to its parent prefix).
         """
-        zip_key = "/".join([prefix.rstrip("/"), zip_name])
+        parent = self._s3_parent_prefix(prefix)
+        zip_key = "/".join([parent, zip_name]) if parent else zip_name
         s3.upload_file(str(zip_path), bucket, zip_key)
 
     def _constrain_dates(
