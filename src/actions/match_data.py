@@ -1,5 +1,5 @@
 from __future__ import annotations
-
+import os
 from pathlib import Path
 from typing import Union
 
@@ -15,10 +15,14 @@ def main() -> None:
     # Root where points CSV and tiles live (S3 or local). config.OUTPUT_ROOT may be Path or s3://
     root_folder: Union[str, Path] = config.OUTPUT_ROOT
 
-    ORIGINAL_CSV = join_uri(root_folder, "points_with_index.csv")
-    TILES_DIR    = join_uri(root_folder, "C3S-GLO-SST-L4-REP-OBS-SST")
+    DATASET_ID = os.getenv("CM_DATASET_ID").strip()
+    _vars = os.getenv("CM_VARIABLES")
+    VARIABLES = [v.strip() for v in _vars.split(",") if v.strip()]
+    DATA_MATCH_INPUT = os.getenv("CM_DATA_MATCH_CSV").strip()
 
-    VARIABLES = ["analysed_sst"]  # example variable
+    ORIGINAL_CSV = join_uri(root_folder, DATA_MATCH_INPUT)
+    TILES_DIR = join_uri(root_folder, DATASET_ID)
+
     COLS = CsvColumns(
         unique_id="row_id",
         survey="survey_number",
@@ -45,9 +49,14 @@ def main() -> None:
     out = digester.run()
 
     # Save result next to inputs (S3 or local) using your utils
-    out_csv = join_uri(root_folder, "C3S-GLO-SST-L4-REP-OBS-SST.csv") if _is_s3(root_folder) \
-              else Path(root_folder) / "C3S-GLO-SST-L4-REP-OBS-SST.csv"
-    write_csv(out, out_csv)  # don't pass index: utils.write_csv already sets index=False
+    out_csv = (
+        join_uri(root_folder, f"{DATASET_ID}.csv")
+        if _is_s3(root_folder)
+        else Path(root_folder) / f"{DATASET_ID}.csv"
+    )
+    write_csv(
+        out, out_csv
+    )  # don't pass index: utils.write_csv already sets index=False
 
 
 if __name__ == "__main__":
