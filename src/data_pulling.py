@@ -1,13 +1,13 @@
 from __future__ import annotations
 
+import math
+import tempfile
+import boto3
+import pandas as pd
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Sequence, List, Tuple, Union
-import math
-import tempfile
-
-import boto3
-import pandas as pd
 
 from src.utils import _is_s3, join_uri, read_csv  # reuse your helpers
 from src.copernicus.cm_subset_client import CMSubsetClient
@@ -173,6 +173,39 @@ class SummaryDownloader:
             raise ValueError(f"Bad S3 URI: {uri}")
         return bucket, key
 
+    def _zip_dir(self, src_dir: Path, zip_path: Path) -> None:
+        # Zip all regular files under src_dir (non-recursive) with relative names.
+        with zipfile.ZipFile(
+            zip_path, mode="w", compression=zipfile.ZIP_DEFLATED
+        ) as zf:
+            for p in sorted(src_dir.iterdir()):
+                if p.is_file():
+                    zf.write(p, arcname=p.name)
+
+    def _create_zip_bundle(self, local_out: Path) -> tuple[str, Path]:
+        """
+        Build zip name from the last segment of output_dir, zip local_out, return (zip_name, zip_path).
+        """
+        if _is_s3(self.output_dir):
+            _, prefix = self._parse_s3(str(self.output_dir))
+            folder_basename = prefix.rstrip("/").split("/")[-1]
+        else:
+            folder_basename = Path(self.output_dir).name
+
+        zip_name = f"{folder_basename}.zip"
+        zip_path = local_out / zip_name
+        self._zip_dir(local_out, zip_path)
+        return zip_name, zip_path
+
+    def _upload_zip_bundle_to_s3(
+        self, *, s3, bucket: str, prefix: str, zip_name: str, zip_path: Path
+    ) -> None:
+        """
+        Upload the previously created zip bundle to s3://bucket/prefix/zip_name.
+        """
+        zip_key = "/".join([prefix.rstrip("/"), zip_name])
+        s3.upload_file(str(zip_path), bucket, zip_key)
+
     def run(self) -> pd.DataFrame:
         writing_to_s3 = _is_s3(self.output_dir)
 
@@ -198,6 +231,7 @@ class SummaryDownloader:
                 end_datetime=job.end_datetime or self.end_datetime,
             )
 
+        zip_name, zip_path = self._create_zip_bundle(local_out)
         if writing_to_s3:
             s3 = boto3.client("s3")
             bucket, prefix = self._parse_s3(str(self.output_dir))
@@ -205,6 +239,14 @@ class SummaryDownloader:
                 src = local_out / j.output_filename
                 key = "/".join([prefix.rstrip("/"), j.output_filename])
                 s3.upload_file(str(src), bucket, key)
+
+            self._upload_zip_bundle_to_s3(
+                s3=s3,
+                bucket=bucket,
+                prefix=prefix,
+                zip_name=zip_name,
+                zip_path=zip_path,
+            )
 
         manifest_rows = []
         for j in jobs:
