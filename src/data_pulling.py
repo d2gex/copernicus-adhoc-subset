@@ -187,13 +187,14 @@ class SummaryDownloader:
         return bucket, key
 
     def _zip_dir(self, src_dir: Path, zip_path: Path) -> None:
-        # Zip all regular files under src_dir (non-recursive) with relative names.
-        with zipfile.ZipFile(
-            zip_path, mode="w", compression=zipfile.ZIP_DEFLATED
-        ) as zf:
-            for p in sorted(src_dir.iterdir()):
-                if p.is_file():
-                    zf.write(p, arcname=p.name)
+        # Build a stable list first and exclude the zip we're creating
+        files = [
+            p for p in sorted(src_dir.iterdir())
+            if p.is_file() and p.resolve() != zip_path.resolve()
+        ]
+        with zipfile.ZipFile(zip_path, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+            for p in files:
+                zf.write(p, arcname=p.name)
 
     def _create_zip_bundle(self, local_out: Path) -> tuple[str, Path]:
         """
